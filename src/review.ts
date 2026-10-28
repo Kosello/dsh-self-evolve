@@ -243,6 +243,7 @@ export function apply(ctx: Context, options: ReviewPluginOptions): void {
         ...(outcome.probability === undefined ? {} : { probability: outcome.probability }),
         toolCalls,
         ...(outcome.latencyMs === undefined ? {} : { latencyMs: outcome.latencyMs }),
+        ...(selection.mode === 'jev' ? { threshold: policy.jev.confidentNo } : {}),
       })
       if (!outcome.review) {
         ctx.logger.info('review skipped by gate for %s: %s', agent.id, outcome.reason)

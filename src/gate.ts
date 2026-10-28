@@ -270,6 +270,8 @@ export interface GateLogEntry {
   probability?: number
   toolCalls: number
   latencyMs?: number
+  /** The confidentNo in force when the decision was made. */
+  threshold?: number
 }
 
 /** Append one JSON line to `<stateDir>/gates.jsonl`; logging never throws. */

@@ -198,6 +198,20 @@ review:
 - The gate never writes, never approves, and never decides permissions — it can
   only cancel a review it is confident is pointless.
 
+**Tuning from the log.** Every line records the `threshold` that was in force,
+so the trade-off is reproducible:
+
+```bash
+npm run gate-stats                  # ~/.dsh/self-evolve/gates.jsonl
+node scripts/gate-stats.mjs /path/to/gates.jsonl
+```
+
+It prints the decision split, `no`-confidence percentiles, fallback reasons,
+latency, and a table of how many decisions each candidate threshold would have
+skipped. The log cannot tell you whether a skipped turn was actually worth a
+skill — that judgement stays with you; the table just makes the cost/coverage
+trade-off concrete.
+
 **Curator.** A mechanical pass marks agent-authored skills stale after
 `staleDays` and archives them after `archiveDays`, restoring the file's mtime
 so bookkeeping never counts as activity. Pinned skills are exempt. Nothing is
@@ -210,6 +224,7 @@ npm run check   # tsc against DSH 0.2.1-rc.2
 npm test        # 106 unit/integration tests
 npm run build   # dist/index.js
 npm run smoke   # built tool -> real dsh-skill + dsh-skill-filesystem catalog
+npm run gate-stats  # summarize gates.jsonl and compare confidentNo values
 ```
 
 The smoke test writes a skill through the built `skill_manage` tool and

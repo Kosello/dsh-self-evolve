@@ -24,7 +24,8 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "verify": "npm run check && npm run test && npm run build && npm run smoke",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "gate-stats": "node scripts/gate-stats.mjs"
   },
   "engines": {
     "node": ">=22.19.0"
