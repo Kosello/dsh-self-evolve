@@ -7,20 +7,25 @@ import { apply } from '../src/command.js'
 import { approvalEnabled, listPending, stageSkillWrite } from '../src/approval.js'
 import { directoryLocation } from '../src/store.js'
 import { stampMetadata } from '../src/skillfile.js'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { resolveConfig } from '../src/config.js'
+import type { ReviewRef } from '../src/review.js'
 
 let root: string
 let stateDir: string
 
 interface Invocation {
   rawInput: string
+  agent: Agent
 }
+
+const AGENT = { id: 'command-agent', session: { header: {} } } as unknown as Agent
 
 interface Handler {
   (invocation: Invocation): Promise<{ kind: 'success' | 'error'; text: string }>
 }
 
-function setup(): Handler {
+function setup(review: ReviewRef = {}): Handler {
   const captured: { handler?: Handler } = {}
   const ctx = {
     commands: {
@@ -30,7 +35,7 @@ function setup(): Handler {
       },
     },
   } as unknown as Context
-  apply(ctx, resolveConfig({ skillsRoot: root, stateDir }))
+  apply(ctx, { config: resolveConfig({ skillsRoot: root, stateDir }), review })
   if (captured.handler === undefined) throw new Error('command was not registered')
   return captured.handler
 }
@@ -57,14 +62,14 @@ describe('/skills command', () => {
       }, { now: '2026-08-19T00:00:00.000Z', create: true }),
     })
 
-    const listed = await handler({ rawInput: 'pending' })
+    const listed = await handler({ rawInput: 'pending', agent: AGENT })
     expect(listed.kind).toBe('success')
     expect(listed.text).toContain(manifest.id)
 
-    const diff = await handler({ rawInput: `diff ${manifest.id}` })
+    const diff = await handler({ rawInput: `diff ${manifest.id}`, agent: AGENT })
     expect(diff.text).toContain('+1. Do it')
 
-    const approved = await handler({ rawInput: `approve ${manifest.id}` })
+    const approved = await handler({ rawInput: `approve ${manifest.id}`, agent: AGENT })
     expect(approved.kind).toBe('success')
     expect(await readFile(join(root, 'cmd-skill', 'SKILL.md'), 'utf8')).toContain('Do it')
     expect(await listPending(stateDir)).toEqual([])
@@ -81,7 +86,7 @@ describe('/skills command', () => {
         body: '1. Do it',
       }, { now: '2026-08-19T00:00:00.000Z', create: true }),
     })
-    const rejected = await handler({ rawInput: `reject ${manifest.id}` })
+    const rejected = await handler({ rawInput: `reject ${manifest.id}`, agent: AGENT })
     expect(rejected.text).toMatch(/rejected/)
     expect(await listPending(stateDir)).toEqual([])
   })
@@ -89,16 +94,53 @@ describe('/skills command', () => {
   it('toggles the runtime approval gate', async () => {
     const handler = setup()
     expect(await approvalEnabled(stateDir, false)).toBe(false)
-    const on = await handler({ rawInput: 'approval on' })
+    const on = await handler({ rawInput: 'approval on', agent: AGENT })
     expect(on.kind).toBe('success')
     expect(await approvalEnabled(stateDir, false)).toBe(true)
-    await handler({ rawInput: 'approval off' })
+    await handler({ rawInput: 'approval off', agent: AGENT })
     expect(await approvalEnabled(stateDir, true)).toBe(false)
   })
 
   it('returns an error for unknown subcommands and missing ids', async () => {
     const handler = setup()
-    expect((await handler({ rawInput: 'nonsense' })).kind).toBe('error')
-    expect((await handler({ rawInput: 'approve nope' })).kind).toBe('error')
+    expect((await handler({ rawInput: 'nonsense', agent: AGENT })).kind).toBe('error')
+    expect((await handler({ rawInput: 'approve nope', agent: AGENT })).kind).toBe('error')
+  })
+
+})
+
+describe('/skills review commands', () => {
+  it('reports unavailable without a controller', async () => {
+    const handler = setup()
+    const result = await handler({ rawInput: 'review', agent: AGENT })
+    expect(result.kind).toBe('error')
+    expect(result.text).toMatch(/Reviewer unavailable/)
+  })
+
+  it('reports status, toggles and forces through the controller', async () => {
+    const calls: string[] = []
+    let forcedAgent: Agent | undefined
+    const review: ReviewRef = {
+      controller: {
+        async enabled() { return true },
+        async setEnabled(enabled) { calls.push(`set:${String(enabled)}`) },
+        async status() { return 'review on - test' },
+        async force(agent) { forcedAgent = agent; return 'review started in a forked child session' },
+      },
+    }
+    const handler = setup(review)
+
+    const status = await handler({ rawInput: 'review', agent: AGENT })
+    expect(status.text).toContain('review on')
+
+    const off = await handler({ rawInput: 'review off', agent: AGENT })
+    expect(off.text).toContain('off')
+    expect(calls).toContain('set:false')
+
+    const now = await handler({ rawInput: 'review now', agent: AGENT })
+    expect(now.text).toMatch(/review started/)
+    expect(forcedAgent).toBe(AGENT)
+
+    expect((await handler({ rawInput: 'review bogus', agent: AGENT })).kind).toBe('error')
   })
 })

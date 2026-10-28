@@ -31,6 +31,15 @@ function config(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
     lint: true,
     projectRootMarkers: ['.git'],
     pendingTtlDays: 14,
+    review: {
+      enabled: false,
+      turnInterval: 10,
+      toolCallThreshold: 15,
+      cooldownMinutes: 20,
+      maxPerSession: 8,
+      provider: 'fork',
+      timeoutMinutes: 5,
+    },
     ...overrides,
   }
 }

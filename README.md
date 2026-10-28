@@ -6,9 +6,11 @@ and `dsh-skill-filesystem` surfaces it to later sessions with progressive
 disclosure for free.
 
 This is a fork of [`jianghuife/dsh-self-evolve`](https://github.com/jianghuife/dsh-self-evolve)
-(MIT), ported to DSH `0.2.1-rc.2` and hardened. The upstream proof-of-concept
-was 0.1.0, one commit; this fork keeps its small, clean core and adds the
-safety rails an unattended self-improvement loop needs.
+(MIT), ported to DSH `0.2.1-rc.2`, hardened, and extended with the automatic
+half of the loop: a post-turn reviewer that forks the conversation and decides
+whether a skill should be created or patched. The upstream proof-of-concept was
+0.1.0, one commit; this fork keeps its small, clean core and adds the safety
+rails an unattended self-improvement loop needs.
 
 ## What the fork adds
 
@@ -23,6 +25,7 @@ safety rails an unattended self-improvement loop needs.
 | Credentials | — | blocking scan for keys/tokens/private-key blocks |
 | Lint | — | advisory: oversized body, incident-log shape, references sprawl, destructive shell idioms |
 | Discovery | — | `skill_manage(action="list")` |
+| Automatic review | — | forks the completed turn and reviews it for skill updates (opt-in, budgeted) |
 
 ## Install
 
@@ -60,6 +63,10 @@ All keys are optional. Set them on the row in the profile's
       config:
         writeApproval: true      # stage every write until approved
         duplicateThreshold: 0.55 # 0 disables duplicate refusal
+        review:
+          enabled: true          # the reviewer spends tokens; opt in
+          turnInterval: 10
+          toolCallThreshold: 15
 ```
 
 | Key | Default | Meaning |
@@ -77,6 +84,13 @@ All keys are optional. Set them on the row in the profile's
 | `projectRootMarkers` | `[".git"]` | how a project root is found above the session cwd |
 | `pendingTtlDays` | `14` | staged writes expire after this |
 | `guidance` | `true` | inject the static self-improvement prompt section |
+| `review.enabled` | `false` | run the post-turn reviewer |
+| `review.turnInterval` | `10` | review after this many completed turns |
+| `review.toolCallThreshold` | `15` | or after this many tool calls since the last review |
+| `review.cooldownMinutes` | `20` | minimum minutes between reviews of one session |
+| `review.maxPerSession` | `8` | hard cap per session |
+| `review.provider` | `fork` | subagent provider for the review child |
+| `review.timeoutMinutes` | `5` | abort a review child that runs too long |
 
 ## Using it
 
@@ -116,6 +130,26 @@ after `pendingTtlDays`.
 mutable. Bundled, hub-installed and hand-written skills are read-only; the
 curator never touches them, and project skills are never curated.
 
+**Automatic review.** With `review.enabled` on (or `/skills review on`), a
+completed turn triggers a **forked child session** once the counters say it is
+due: 10 completed turns or 15 tool calls since the last review, at most one
+review per 20 minutes, at most 8 per session. The child sees the finished
+conversation, gets one instruction — review it for durable skill updates — and
+writes through the same `skill_manage` tool, so read-before-write, duplicate
+refusal, credential scan and staged approval all still apply. Its completion
+never reaches the parent conversation (`delivery: "caller"`), and subagent
+sessions are never reviewed.
+
+The review child is narrowed to `skill` and `skill_manage` when the host's
+tool runtime can restrict its scope; DSH has no per-activation tool filter, so
+the prompt also forbids every other tool. Treat that as defence in depth, not a
+sandbox, and run with `writeApproval: true` if you enable reviews on sessions
+that touch untrusted content.
+
+Cost: each review replays the conversation on your main model, so it is the
+expensive part of the loop. The counters, cooldown and per-session cap exist
+to bound it; `/skills review off` stops it immediately.
+
 **Curator.** A mechanical pass marks agent-authored skills stale after
 `staleDays` and archives them after `archiveDays`, restoring the file's mtime
 so bookkeeping never counts as activity. Pinned skills are exempt. Nothing is
@@ -125,20 +159,26 @@ ever hard-deleted.
 
 ```bash
 npm run check   # tsc against DSH 0.2.1-rc.2
-npm test        # 72 unit/integration tests
+npm test        # 86 unit/integration tests
 npm run build   # dist/index.js
 npm run smoke   # built tool -> real dsh-skill + dsh-skill-filesystem catalog
 ```
 
 The smoke test writes a skill through the built `skill_manage` tool and
-asserts the real filesystem provider discovers it.
+asserts the real filesystem provider discovers it. Set
+`DSH_SELF_EVOLVE_DEBUG=1` to print the reviewer policy when the plugin
+activates (useful when checking that a composition mounts the subagent
+service).
 
 ## Not included (next)
 
-The Hermes-style post-turn background review — a forked reviewer that reads a
-finished conversation and patches/creates skills on its own — is **not** in
-this version. This fork ships the write path, the discipline and the guards it
-needs to be safe to enable; the reviewer is the next milestone.
+- **LLM curation.** The curator is mechanical: age, stale, archive. It does not
+  vote keep/patch/consolidate on overlapping skills.
+- **Memory writes.** The reviewer is skills-only by design; durable facts
+  belong in whatever memory layer the profile composes (e.g. Hindsight over
+  MCP), not in this plugin.
+- **Per-activation tool sandbox.** Tool narrowing is post-hoc and best effort;
+  see the caveat above.
 
 ## License
 

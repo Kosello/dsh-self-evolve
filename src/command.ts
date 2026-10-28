@@ -1,33 +1,45 @@
 /**
- * The `/skills` human command: review and settle staged skill writes.
+ * The `/skills` human command: settle staged skill writes and control the
+ * post-turn reviewer.
  *
  * Staging without a human surface is a dead end, so the approval gate ships
- * with the only surface that a UI-less model cannot drive itself. The command
- * runs against the receiving agent and never becomes a model message.
+ * with the only surface a UI-less model cannot drive itself. The command runs
+ * against the receiving agent and never becomes a model message.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { join } from 'node:path'
 import {
   approvalEnabled, approvePending, listPending, readPending, rejectPending, setApprovalEnabled,
 } from './approval.js'
 import type { ResolvedConfig } from './config.js'
+import type { ReviewRef } from './review.js'
 
 export const name = 'self-evolve-command'
 export const inject = ['commands']
 
+export interface CommandOptions {
+  config: ResolvedConfig
+  review: ReviewRef
+}
+
 const USAGE = [
-  'Usage: /skills [pending | diff <id> | approve <id|all> | reject <id|all> | approval on|off]',
+  'Usage: /skills [pending | diff <id> | approve <id|all> | reject <id|all> | approval on|off | review [on|off|now]]',
   '',
   'pending        list staged skill_manage writes waiting for approval',
   'diff <id>      show the staged diff',
   'approve <id>   apply one staged write (or "all")',
   'reject <id>    discard one staged write (or "all")',
   'approval on    stage every skill_manage write until turned off',
+  'review         show the post-turn reviewer state',
+  'review on|off  enable or disable automatic post-turn reviews',
+  'review now     run one review immediately',
 ].join('\n')
 
 interface CommandInvocation {
   rawInput: string
+  agent: Agent
 }
 
 type CommandResult = { kind: 'success'; text: string } | { kind: 'error'; text: string }
@@ -49,14 +61,15 @@ function failure(text: string): CommandResult {
   return { kind: 'error', text }
 }
 
-export function apply(ctx: Context, config: ResolvedConfig): void {
+export function apply(ctx: Context, options: CommandOptions): void {
+  const { config, review } = options
   const commands = (ctx as Context & { commands?: CommandSurface }).commands
   if (commands === undefined) return
   commands.register({
     name: 'skills',
-    description: 'Review staged skill writes (approval gate for skill_manage)',
-    input: { hint: 'pending | diff <id> | approve <id|all> | reject <id|all> | approval on|off' },
-    async handler({ rawInput }: CommandInvocation) {
+    description: 'Review staged skill writes and control the post-turn skill reviewer',
+    input: { hint: 'pending | diff <id> | approve <id|all> | reject <id|all> | approval on|off | review [on|off|now]' },
+    async handler({ rawInput, agent }: CommandInvocation) {
       const tokens = rawInput.trim().split(/\s+/).filter((token: string) => token.length > 0)
       const sub = tokens[0] ?? 'pending'
       try {
@@ -116,6 +129,22 @@ export function apply(ctx: Context, config: ResolvedConfig): void {
             return success(value === 'on'
               ? 'Approval gate on: every skill_manage write is staged until approved with /skills approve.'
               : 'Approval gate off: skill_manage writes commit immediately.')
+          }
+          case 'review': {
+            const controller = review.controller
+            if (controller === undefined) {
+              return failure('Reviewer unavailable: this composition has no subagent service (mount @deepseek-ai/dsh-subagent and a provider).')
+            }
+            const action = tokens[1]
+            if (action === undefined) return success(await controller.status())
+            if (action === 'on' || action === 'off') {
+              await controller.setEnabled(action === 'on')
+              return success(action === 'on'
+                ? `Automatic review on. ${await controller.status()}`
+                : `Automatic review off. ${await controller.status()}`)
+            }
+            if (action === 'now') return success(await controller.force(agent))
+            return failure('Usage: /skills review [on|off|now]')
           }
           default:
             return failure(USAGE)

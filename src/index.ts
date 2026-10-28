@@ -25,6 +25,8 @@ import { runCurator } from './curator.js'
 import { prunePending } from './approval.js'
 import * as guidance from './guidance.js'
 import * as command from './command.js'
+import * as review from './review.js'
+import type { ReviewRef } from './review.js'
 
 export { Config } from './config.js'
 export {
@@ -36,6 +38,8 @@ export type { CurationReport } from './curator.js'
 export { approvalEnabled, listPending, approvePending, rejectPending, setApprovalEnabled } from './approval.js'
 export { findDuplicates, similarity } from './dedupe.js'
 export { lintSkill, scanSecrets } from './lint.js'
+export { reviewDecision, reviewEnabled, setReviewEnabled } from './review.js'
+export type { ReviewController, ReviewState } from './review.js'
 
 export const name = 'self-evolve'
 export const inject = ['tools']
@@ -48,8 +52,13 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Prompt guidance only where a systemPrompt service is composed.
   if (resolved.guidance) ctx.plugin(guidance)
 
-  // Approval commands only where an interactive command surface exists.
-  ctx.plugin(command, resolved)
+  // Post-turn reviewer: a nested plugin so a tree without the subagent
+  // service simply leaves it pending instead of failing the whole plugin.
+  const reviewRef: ReviewRef = {}
+  ctx.plugin(review, { config: resolved, ref: reviewRef })
+
+  // Approval + review commands only where an interactive command surface exists.
+  ctx.plugin(command, { config: resolved, review: reviewRef })
 
   // One curation pass per interval, off the startup path. setTimeout keeps
   // apply() synchronous; the effect disposal cancels a pending pass on

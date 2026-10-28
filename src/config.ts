@@ -44,6 +44,25 @@ export interface Config {
   projectRootMarkers?: string[]
   /** Days a staged write survives before it is pruned. */
   pendingTtlDays?: number
+  /** Post-turn background review (the automatic half of the loop). */
+  review?: ReviewConfig
+}
+
+export interface ReviewConfig {
+  /** Run the post-turn reviewer at all. Default false: it spends tokens. */
+  enabled?: boolean
+  /** Review after this many completed user turns without a review. */
+  turnInterval?: number
+  /** Or after this many tool calls accumulated since the last review. */
+  toolCallThreshold?: number
+  /** Minimum minutes between two reviews of one session. */
+  cooldownMinutes?: number
+  /** Hard cap on reviews per session lifetime. */
+  maxPerSession?: number
+  /** Subagent provider used for the review child. Default "fork" (seeded). */
+  provider?: string
+  /** Abort a review child that runs longer than this. */
+  timeoutMinutes?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -62,6 +81,15 @@ export const Config: z<Config> = z.object({
   lint: z.boolean().description('Run the advisory linter on writes (default: true)'),
   projectRootMarkers: z.array(z.string()).description('Markers that identify a project root (default: [".git"])'),
   pendingTtlDays: z.natural().description('Days a staged write survives before pruning (default: 14)'),
+  review: z.object({
+    enabled: z.boolean().description('Run the post-turn background reviewer (default: false — it spends tokens)'),
+    turnInterval: z.natural().description('Review after this many completed turns without one (default: 10)'),
+    toolCallThreshold: z.natural().description('Or after this many tool calls since the last review (default: 15)'),
+    cooldownMinutes: z.natural().description('Minimum minutes between reviews of one session (default: 20)'),
+    maxPerSession: z.natural().description('Hard cap on reviews per session (default: 8)'),
+    provider: z.string().description('Subagent provider for the review child (default: fork)'),
+    timeoutMinutes: z.natural().description('Abort a review child after this many minutes (default: 5)'),
+  }),
 })
 
 export interface ResolvedConfig {
@@ -80,6 +108,17 @@ export interface ResolvedConfig {
   lint: boolean
   projectRootMarkers: string[]
   pendingTtlDays: number
+  review: ResolvedReviewConfig
+}
+
+export interface ResolvedReviewConfig {
+  enabled: boolean
+  turnInterval: number
+  toolCallThreshold: number
+  cooldownMinutes: number
+  maxPerSession: number
+  provider: string
+  timeoutMinutes: number
 }
 
 export const DEFAULT_PROJECT_MARKERS: readonly string[] = ['.git']
@@ -102,5 +141,14 @@ export function resolveConfig(config: Config = {}): ResolvedConfig {
     lint: config.lint ?? true,
     projectRootMarkers: config.projectRootMarkers ?? [...DEFAULT_PROJECT_MARKERS],
     pendingTtlDays: config.pendingTtlDays ?? 14,
+    review: {
+      enabled: config.review?.enabled ?? false,
+      turnInterval: config.review?.turnInterval ?? 10,
+      toolCallThreshold: config.review?.toolCallThreshold ?? 15,
+      cooldownMinutes: config.review?.cooldownMinutes ?? 20,
+      maxPerSession: config.review?.maxPerSession ?? 8,
+      provider: config.review?.provider ?? 'fork',
+      timeoutMinutes: config.review?.timeoutMinutes ?? 5,
+    },
   }
 }
