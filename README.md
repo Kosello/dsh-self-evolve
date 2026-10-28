@@ -125,7 +125,7 @@ ever hard-deleted.
 
 ```bash
 npm run check   # tsc against DSH 0.2.1-rc.2
-npm test        # 68 unit/integration tests
+npm test        # 72 unit/integration tests
 npm run build   # dist/index.js
 npm run smoke   # built tool -> real dsh-skill + dsh-skill-filesystem catalog
 ```
