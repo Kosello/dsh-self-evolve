@@ -2,7 +2,7 @@
   "name": "dsh-self-evolve",
   "version": "0.4.0",
   "private": true,
-  "description": "Fork of dsh-self-evolve: agent-authored procedural skills for DeepSeek Harness, ported to DSH 0.2.1-rc.2 with read-before-write, staged approvals, project scope and duplicate detection.",
+  "description": "Agent-authored procedural memory for DeepSeek Harness: a guarded skill_manage tool, an opt-in post-turn reviewer, and an optional Jev decision gate.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,7 +17,9 @@
     "dist",
     "cordis.patch.yml",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "docs"
   ],
   "scripts": {
     "build": "tsup",
@@ -34,9 +36,14 @@
     "deepseek-harness",
     "dsh-plugin",
     "dsh",
-    "self-evolution",
     "skills",
-    "curator"
+    "procedural-memory",
+    "self-evolution",
+    "self-improvement",
+    "reviewer",
+    "curator",
+    "jev",
+    "typesafe"
   ],
   "license": "MIT",
   "dsh": {
