@@ -73,5 +73,13 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kosello/dsh-self-evolve.git"
+  },
+  "homepage": "https://github.com/Kosello/dsh-self-evolve#readme",
+  "bugs": {
+    "url": "https://github.com/Kosello/dsh-self-evolve/issues"
   }
 }

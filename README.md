@@ -39,13 +39,13 @@ safety rails plus the automatic half of the loop.
 From GitHub (once the repository is published):
 
 ```bash
-dsh plugin --profile web add github:OWNER/dsh-self-evolve
+dsh plugin --profile web add github:Kosello/dsh-self-evolve
 ```
 
 From a local checkout:
 
 ```bash
-git clone https://github.com/OWNER/dsh-self-evolve.git
+git clone https://github.com/Kosello/dsh-self-evolve.git
 cd dsh-self-evolve
 npm ci
 npm run build          # produces dist/ (also committed for GitHub installs)

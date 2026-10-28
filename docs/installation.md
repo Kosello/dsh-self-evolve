@@ -17,7 +17,7 @@ not need a build toolchain. A local checkout can rebuild it.
 Once the repository is published:
 
 ```bash
-dsh plugin --profile web add github:OWNER/dsh-self-evolve
+dsh plugin --profile web add github:Kosello/dsh-self-evolve
 ```
 
 `dsh plugin` forwards to the profile's package manager, which installs the
@@ -35,7 +35,7 @@ systemctl --user restart deepseek-harness.service   # if it runs as a user unit
 ## Option B — from a local checkout
 
 ```bash
-git clone https://github.com/OWNER/dsh-self-evolve.git
+git clone https://github.com/Kosello/dsh-self-evolve.git
 cd dsh-self-evolve
 npm ci
 npm run build          # dist/index.js + declarations
@@ -148,7 +148,7 @@ from outside the harness or with a delayed transient timer.
 
 ## Updating
 
-- GitHub install: `dsh plugin --profile web add github:OWNER/dsh-self-evolve`
+- GitHub install: `dsh plugin --profile web add github:Kosello/dsh-self-evolve`
   again, then restart.
 - Local checkout: `git pull && npm ci && npm run build`, then restart.
 - Manual wiring: update the linked checkout; restart.
