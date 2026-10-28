@@ -40,6 +40,10 @@ export { findDuplicates, similarity } from './dedupe.js'
 export { lintSkill, scanSecrets } from './lint.js'
 export { reviewDecision, reviewEnabled, setReviewEnabled } from './review.js'
 export type { ReviewController, ReviewState } from './review.js'
+export { createJevGate, decisionFromAnswer, selectGate } from './gate.js'
+export type { GateOutcome, ReviewGate } from './gate.js'
+export { DigestBuffer } from './digest.js'
+export type { TurnDigest } from './digest.js'
 
 export const name = 'self-evolve'
 export const inject = ['tools']

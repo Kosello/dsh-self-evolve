@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -6,6 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { resolveConfig, type Config } from '../src/config.js'
 import { apply, reviewDecision, reviewEnabled, setReviewEnabled, type ReviewRef, type ReviewState } from '../src/review.js'
+import type { GateOutcome, ReviewGate } from '../src/gate.js'
 
 let root: string
 let stateDir: string
@@ -24,6 +25,7 @@ interface Harness {
   restricted: Array<{ allow: readonly string[] }>
   emitTurnEnd(sessionId: string, kind?: 'completed' | 'error' | 'aborted'): Promise<void>
   emitToolResult(agent: Agent): void
+  emitDigest(user: string, assistant: string): void
   resolveReview(): Promise<void>
   agent: Agent
   subagent: Agent
@@ -37,7 +39,7 @@ function childAgent(id = 'child'): Agent {
   return { id, session: { header: { origin: 'subagent', delegationDepth: 1 } } } as unknown as Agent
 }
 
-function harness(configOverrides: Config = {}): Harness {
+function harness(configOverrides: Config = {}, reviewGate?: ReviewGate): Harness {
   const calls: SpawnCall[] = []
   const restricted: Array<{ allow: readonly string[] }> = []
   const handlers = new Map<string, (first: unknown, second: unknown) => void>()
@@ -81,7 +83,7 @@ function harness(configOverrides: Config = {}): Harness {
     ...configOverrides,
   })
   const ref: ReviewRef = {}
-  apply(ctx, { config, ref })
+  apply(ctx, { config, ref, ...(reviewGate === undefined ? {} : { gate: reviewGate }) })
 
   const agent = rootAgent()
   const subagent = childAgent()
@@ -106,6 +108,17 @@ function harness(configOverrides: Config = {}): Harness {
     },
     emitToolResult(target) {
       handlers.get('tools/result')?.({ agent: target }, { isError: false })
+    },
+    emitDigest(user, assistant) {
+      handlers.get('session/event')?.({ id: agent.id }, { type: 'turn/start', data: { turn: 1 } })
+      handlers.get('session/event')?.({ id: agent.id }, {
+        type: 'user/message',
+        data: { source: { kind: 'user' }, content: [{ type: 'text', text: user }] },
+      })
+      handlers.get('session/event')?.({ id: agent.id }, {
+        type: 'assistant/message',
+        data: { message: { content: [{ type: 'text', text: assistant }] } },
+      })
     },
     resolveReview() {
       release()
@@ -224,6 +237,68 @@ describe('post-turn review', () => {
     const h = harness()
     const message = await h.ref.controller?.force(h.subagent)
     expect(message).toMatch(/top-level session/)
+    expect(h.calls).toHaveLength(0)
+  })
+})
+
+async function readGateLog(): Promise<string> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      return await readFile(join(stateDir, 'gates.jsonl'), 'utf8')
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+  return ''
+}
+
+function fakeGate(outcome: GateOutcome, counter: { calls: number }): ReviewGate {
+  return {
+    async decide() {
+      counter.calls += 1
+      return outcome
+    },
+  }
+}
+
+describe('jev gate wiring', () => {
+  it('cancels a due review when the gate is confident there is nothing to learn', async () => {
+    const counter = { calls: 0 }
+    const h = harness(
+      { review: { enabled: true, turnInterval: 1, toolCallThreshold: 100, cooldownMinutes: 0 } },
+      fakeGate({ review: false, source: 'jev', reason: 'confident no', choice: 'no', confidence: 0.9 }, counter),
+    )
+    h.emitDigest('No, use pnpm here.', 'Switching to pnpm.')
+    await h.emitTurnEnd(h.agent.id)
+    expect(counter.calls).toBe(1)
+    expect(h.calls).toHaveLength(0)
+
+    expect(await readGateLog()).toContain('"decision":"skip"')
+  })
+
+  it('lets the review through when the gate says yes', async () => {
+    const counter = { calls: 0 }
+    const h = harness(
+      { review: { enabled: true, turnInterval: 1, toolCallThreshold: 100, cooldownMinutes: 0 } },
+      fakeGate({ review: true, source: 'jev', reason: 'yes', choice: 'yes', confidence: 0.9 }, counter),
+    )
+    h.emitDigest('No, use pnpm here.', 'Switching to pnpm.')
+    await h.emitTurnEnd(h.agent.id)
+    expect(counter.calls).toBe(1)
+    expect(h.calls).toHaveLength(1)
+    await h.resolveReview()
+  })
+
+  it('does not call the gate again inside the gate cooldown', async () => {
+    const counter = { calls: 0 }
+    const h = harness(
+      { review: { enabled: true, turnInterval: 1, toolCallThreshold: 100, cooldownMinutes: 0 } },
+      fakeGate({ review: false, source: 'jev', reason: 'confident no', choice: 'no', confidence: 0.9 }, counter),
+    )
+    h.emitDigest('No, use pnpm here.', 'Switching to pnpm.')
+    await h.emitTurnEnd(h.agent.id)
+    await h.emitTurnEnd(h.agent.id)
+    expect(counter.calls).toBe(1)
     expect(h.calls).toHaveLength(0)
   })
 })

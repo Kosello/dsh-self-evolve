@@ -25,6 +25,8 @@ import type {} from '@deepseek-ai/dsh-subagent'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ResolvedConfig, ResolvedReviewConfig } from './config.js'
+import { DigestBuffer } from './digest.js'
+import { appendGateLog, selectGate, type GateOutcome, type ReviewGate } from './gate.js'
 
 /** Per-session review counters. */
 export interface ReviewState {
@@ -38,10 +40,12 @@ export interface ReviewState {
   count: number
   /** A review is running; never overlap. */
   inFlight: boolean
+  /** Epoch ms of the last gate call (Jev mode only). */
+  lastGateAt?: number
 }
 
 export type ReviewDecision =
-  | { due: true; reason: 'tools' | 'turns' | 'forced' }
+  | { due: true; reason: 'tools' | 'turns' | 'forced' | 'gate' }
   | { due: false; reason: string }
 
 /** Pure trigger policy, exported for tests. */
@@ -131,11 +135,17 @@ export const inject = ['agents', 'subagents']
 interface ReviewPluginOptions {
   config: ResolvedConfig
   ref: ReviewRef
+  /** Test seam: replace the configured gate. */
+  gate?: ReviewGate
 }
 
 export function apply(ctx: Context, options: ReviewPluginOptions): void {
   const { config, ref } = options
   const policy = config.review
+  const digests = new DigestBuffer()
+  const selection = options.gate === undefined
+    ? selectGate(policy, ctx.logger)
+    : { gate: options.gate, mode: 'jev' as const }
   const states = new Map<string, ReviewState>()
   const stateFor = (id: string): ReviewState => {
     const existing = states.get(id)
@@ -145,12 +155,14 @@ export function apply(ctx: Context, options: ReviewPluginOptions): void {
     return created
   }
 
+  type StartTrigger = 'auto' | 'forced' | 'gate'
+
   /** Start one review child; returns false when it was skipped or failed. */
-  const startReview = async (agent: Agent, state: ReviewState, forced: boolean): Promise<boolean> => {
+  const startReview = async (agent: Agent, state: ReviewState, trigger: StartTrigger): Promise<boolean> => {
     if (state.inFlight) return false
-    const decision: ReviewDecision = forced
-      ? { due: true, reason: 'forced' }
-      : reviewDecision(state, policy, Date.now())
+    const decision: ReviewDecision = trigger === 'auto'
+      ? reviewDecision(state, policy, Date.now())
+      : { due: true, reason: trigger }
     if (!decision.due) return false
 
     state.inFlight = true
@@ -175,7 +187,7 @@ export function apply(ctx: Context, options: ReviewPluginOptions): void {
       state.lastReviewAt = Date.now()
       state.tools = 0
       state.turns = 0
-      ctx.logger.info('review started for %s (%s)', agent.id, decision.reason)
+      ctx.logger.info('review started for %s (%s)', agent.id, trigger)
       void activation.result
         .then((result) => {
           ctx.logger.info('review finished for %s: %s', agent.id, result.stopReason)
@@ -203,27 +215,75 @@ export function apply(ctx: Context, options: ReviewPluginOptions): void {
     if (!(await reviewEnabled(config.stateDir, policy.enabled))) return
     const state = stateFor(agent.id)
     state.turns += 1
-    const decision = reviewDecision(state, policy, Date.now())
-    if (!decision.due) return
+    if (!reviewDecision(state, policy, Date.now()).due) return
     // Let the turn/end append settle so the fork seed includes this turn.
     await new Promise((resolve) => setTimeout(resolve, 0))
-    await startReview(agent, state, false)
+
+    if (selection.mode === 'jev') {
+      const gateCooldown = policy.jev.cooldownMinutes * 60_000
+      if (state.lastGateAt !== undefined && Date.now() - state.lastGateAt < gateCooldown) return
+      const toolCalls = state.tools
+      const digest = digests.build(agent.id, toolCalls)
+      const outcome: GateOutcome = digest === undefined
+        ? { review: true, source: 'counters', reason: 'fallback: empty digest' }
+        : await selection.gate.decide(digest)
+      state.lastGateAt = Date.now()
+      state.turns = 0
+      state.tools = 0
+      digests.clearSkills(agent.id)
+      void appendGateLog(config.stateDir, {
+        at: new Date().toISOString(),
+        session: agent.id,
+        turn: digest?.turn ?? 0,
+        decision: outcome.review ? 'review' : 'skip',
+        source: outcome.source,
+        reason: outcome.reason,
+        ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+        ...(outcome.probability === undefined ? {} : { probability: outcome.probability }),
+        toolCalls,
+        ...(outcome.latencyMs === undefined ? {} : { latencyMs: outcome.latencyMs }),
+      })
+      if (!outcome.review) {
+        ctx.logger.info('review skipped by gate for %s: %s', agent.id, outcome.reason)
+        return
+      }
+    }
+    await startReview(agent, state, selection.mode === 'jev' ? 'gate' : 'auto')
   }
 
   // Count tool activity for the current turn's session. Reviews and other
   // subagent children are excluded by the root check.
-  ctx.on('tools/result', (exec) => {
+  ctx.on('tools/result', (exec, result) => {
     const agent = exec.agent
     if (agent === undefined || !isRootAgent(agent)) return
     stateFor(agent.id).tools += 1
+    if (exec.name !== 'skill' || result.isError) return
+    const skillName = (exec.arguments as { name?: unknown } | null | undefined)?.name
+    if (typeof skillName === 'string') digests.noteSkill(agent.id, skillName)
   })
 
   ctx.on('session/event', (session, event) => {
-    if (event.type !== 'turn/end') return
-    if (event.data.reason.kind !== 'completed') return
-    const agent = ctx.agents.get(session.id)
-    if (agent === undefined) return
-    void onTurnEnd(agent)
+    switch (event.type) {
+      case 'turn/start':
+        digests.noteTurn(session.id, event.data.turn)
+        return
+      case 'user/message':
+        digests.noteUser(session.id, event.data.content, event.data.source.kind)
+        return
+      case 'assistant/message':
+        digests.noteAssistant(session.id, event.data.message.content)
+        return
+      case 'turn/end': {
+        if (event.data.reason.kind !== 'completed') return
+        const agent = ctx.agents.get(session.id)
+        if (agent === undefined) return
+        void onTurnEnd(agent)
+        return
+      }
+      default:
+        return
+    }
   })
 
   const controller: ReviewController = {
@@ -231,19 +291,19 @@ export function apply(ctx: Context, options: ReviewPluginOptions): void {
     setEnabled: (enabled) => setReviewEnabled(config.stateDir, enabled),
     async status() {
       const on = await reviewEnabled(config.stateDir, policy.enabled)
-      return `review ${on ? 'on' : 'off'} — every ${policy.turnInterval} turns or ${policy.toolCallThreshold} tool calls, cooldown ${policy.cooldownMinutes}m, max ${policy.maxPerSession}/session, provider "${policy.provider}"`
+      return `review ${on ? 'on' : 'off'} — every ${policy.turnInterval} turns or ${policy.toolCallThreshold} tool calls, cooldown ${policy.cooldownMinutes}m, max ${policy.maxPerSession}/session, provider "${policy.provider}", gate "${selection.mode}"`
     },
     async force(agent) {
       if (!isRootAgent(agent)) return 'review only runs for a top-level session'
       const state = stateFor(agent.id)
-      const started = await startReview(agent, state, true)
+      const started = await startReview(agent, state, 'forced')
       return started ? 'review started in a forked child session' : 'review not started (already running, budget exhausted, or the subagent service refused)'
     },
   }
   ref.controller = controller
   if (process.env.DSH_SELF_EVOLVE_DEBUG === '1') {
     process.stderr.write(
-      `[self-evolve] review ready: provider=${policy.provider} turns=${policy.turnInterval} tools=${policy.toolCallThreshold} cooldown=${policy.cooldownMinutes}m max=${policy.maxPerSession}\n`,
+      `[self-evolve] review ready: provider=${policy.provider} gate=${selection.mode} turns=${policy.turnInterval} tools=${policy.toolCallThreshold} cooldown=${policy.cooldownMinutes}m max=${policy.maxPerSession}\n`,
     )
   }
   ctx.effect(() => () => {

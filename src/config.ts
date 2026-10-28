@@ -63,6 +63,28 @@ export interface ReviewConfig {
   provider?: string
   /** Abort a review child that runs longer than this. */
   timeoutMinutes?: number
+  /** What decides whether a due review is worth running. Default "counters". */
+  gate?: 'counters' | 'jev'
+  /** Jev gate settings (used when gate is "jev"). */
+  jev?: JevConfig
+}
+
+export interface JevConfig {
+  /** Jev model id or alias. Default "jev-latest". */
+  model?: string
+  /** API root. Default "https://api.typesafe.ai". */
+  baseURL?: string
+  /** Environment variable holding the API key. Default "TYPESAFE_API_KEY". */
+  apiKeyEnv?: string
+  /** Per-attempt timeout for the gate request. Default 2000 ms. */
+  timeoutMs?: number
+  /**
+   * Skip the review only when Jev answers "no" with at least this confidence.
+   * Lower values skip more aggressively; 1 disables confident skips.
+   */
+  confidentNo?: number
+  /** Minimum minutes between two gate calls for one session. Default 5. */
+  cooldownMinutes?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -89,6 +111,15 @@ export const Config: z<Config> = z.object({
     maxPerSession: z.natural().description('Hard cap on reviews per session (default: 8)'),
     provider: z.string().description('Subagent provider for the review child (default: fork)'),
     timeoutMinutes: z.natural().description('Abort a review child after this many minutes (default: 5)'),
+    gate: z.union([z.const('counters'), z.const('jev')]).description('What decides whether a due review runs: counters or jev (default: counters)'),
+    jev: z.object({
+      model: z.string().description('Jev model id or alias (default: jev-latest)'),
+      baseURL: z.string().description('TypeSafe API root (default: https://api.typesafe.ai)'),
+      apiKeyEnv: z.string().description('Environment variable holding the API key (default: TYPESAFE_API_KEY)'),
+      timeoutMs: z.natural().description('Per-attempt timeout in milliseconds (default: 2000)'),
+      confidentNo: z.number().min(0).max(1).description('Skip only when Jev answers "no" with at least this confidence (default: 0.75)'),
+      cooldownMinutes: z.natural().description('Minimum minutes between gate calls per session (default: 5)'),
+    }),
   }),
 })
 
@@ -119,6 +150,17 @@ export interface ResolvedReviewConfig {
   maxPerSession: number
   provider: string
   timeoutMinutes: number
+  gate: 'counters' | 'jev'
+  jev: ResolvedJevConfig
+}
+
+export interface ResolvedJevConfig {
+  model: string
+  baseURL: string
+  apiKeyEnv: string
+  timeoutMs: number
+  confidentNo: number
+  cooldownMinutes: number
 }
 
 export const DEFAULT_PROJECT_MARKERS: readonly string[] = ['.git']
@@ -149,6 +191,15 @@ export function resolveConfig(config: Config = {}): ResolvedConfig {
       maxPerSession: config.review?.maxPerSession ?? 8,
       provider: config.review?.provider ?? 'fork',
       timeoutMinutes: config.review?.timeoutMinutes ?? 5,
+      gate: config.review?.gate === 'jev' ? 'jev' : 'counters',
+      jev: {
+        model: config.review?.jev?.model ?? 'jev-latest',
+        baseURL: config.review?.jev?.baseURL ?? 'https://api.typesafe.ai',
+        apiKeyEnv: config.review?.jev?.apiKeyEnv ?? 'TYPESAFE_API_KEY',
+        timeoutMs: config.review?.jev?.timeoutMs ?? 2000,
+        confidentNo: config.review?.jev?.confidentNo ?? 0.75,
+        cooldownMinutes: config.review?.jev?.cooldownMinutes ?? 5,
+      },
     },
   }
 }

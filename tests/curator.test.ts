@@ -39,6 +39,15 @@ function config(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
       maxPerSession: 8,
       provider: 'fork',
       timeoutMinutes: 5,
+      gate: 'counters',
+      jev: {
+        model: 'jev-latest',
+        baseURL: 'https://api.typesafe.ai',
+        apiKeyEnv: 'TYPESAFE_API_KEY',
+        timeoutMs: 2000,
+        confidentNo: 0.75,
+        cooldownMinutes: 5,
+      },
     },
     ...overrides,
   }

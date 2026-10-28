@@ -1,6 +1,6 @@
 {
   "name": "dsh-self-evolve",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Fork of dsh-self-evolve: agent-authored procedural skills for DeepSeek Harness, ported to DSH 0.2.1-rc.2 with read-before-write, staged approvals, project scope and duplicate detection.",
   "type": "module",

@@ -26,6 +26,7 @@ rails an unattended self-improvement loop needs.
 | Lint | — | advisory: oversized body, incident-log shape, references sprawl, destructive shell idioms |
 | Discovery | — | `skill_manage(action="list")` |
 | Automatic review | — | forks the completed turn and reviews it for skill updates (opt-in, budgeted) |
+| Review gating | — | optional Jev (TypeSafe System One) call cancels reviews that are confidently pointless |
 
 ## Install
 
@@ -91,6 +92,13 @@ All keys are optional. Set them on the row in the profile's
 | `review.maxPerSession` | `8` | hard cap per session |
 | `review.provider` | `fork` | subagent provider for the review child |
 | `review.timeoutMinutes` | `5` | abort a review child that runs too long |
+| `review.gate` | `counters` | `counters` or `jev` |
+| `review.jev.model` | `jev-latest` | Jev model id or alias |
+| `review.jev.baseURL` | `https://api.typesafe.ai` | TypeSafe API root |
+| `review.jev.apiKeyEnv` | `TYPESAFE_API_KEY` | env var holding the API key |
+| `review.jev.timeoutMs` | `2000` | per-attempt gate timeout |
+| `review.jev.confidentNo` | `0.75` | skip only when Jev says "no" with at least this confidence |
+| `review.jev.cooldownMinutes` | `5` | minimum minutes between gate calls per session |
 
 ## Using it
 
@@ -150,6 +158,46 @@ Cost: each review replays the conversation on your main model, so it is the
 expensive part of the loop. The counters, cooldown and per-session cap exist
 to bound it; `/skills review off` stops it immediately.
 
+### Jev gate (M3a)
+
+The counters decide *when* the loop is allowed to review; the gate decides
+whether a due review is worth paying for. With `review.gate: "jev"`, the plugin
+sends a bounded digest of the finished turn — last direct user message, last
+assistant message, tool-call count, skills loaded, turn index, and never tool
+output — to TypeSafe's System One model and asks one three-way `choice`
+question: does this turn hold a correction, standing preference, or reusable
+procedure?
+
+Only a confident `no` cancels the review (`review.jev.confidentNo`, default
+0.75). `yes`, `unclear`, low confidence, a missing key, a malformed answer, a
+timeout, or an HTTP failure all fall through to the review, so the worst case is
+the pre-gate behaviour. Three consecutive failures open a circuit breaker for
+the process.
+
+```yaml
+review:
+  gate: jev
+  jev:
+    model: jev-latest
+    apiKeyEnv: TYPESAFE_API_KEY
+    confidentNo: 0.75
+    cooldownMinutes: 5
+```
+
+- The gate is called at most once per `cooldownMinutes` per session. A skipped
+  review resets the turn/tool counters; the next decision waits for the next
+  cadence.
+- Every decision goes to `<stateDir>/gates.jsonl` as
+  `{decision, choice, confidence, probability, reason, latencyMs, toolCalls}`,
+  so the thresholds can be tuned against real data.
+- **Privacy:** the digest leaves the machine. That is the price of the gate,
+  not an implementation detail. With no key in `apiKeyEnv`, the plugin logs one
+  warning at startup and stays on counters.
+- **Cost:** at the time of writing, $0.042 per million input tokens (output is
+  free); one gate call is typically a fraction of a cent.
+- The gate never writes, never approves, and never decides permissions — it can
+  only cancel a review it is confident is pointless.
+
 **Curator.** A mechanical pass marks agent-authored skills stale after
 `staleDays` and archives them after `archiveDays`, restoring the file's mtime
 so bookkeeping never counts as activity. Pinned skills are exempt. Nothing is
@@ -159,7 +207,7 @@ ever hard-deleted.
 
 ```bash
 npm run check   # tsc against DSH 0.2.1-rc.2
-npm test        # 86 unit/integration tests
+npm test        # 106 unit/integration tests
 npm run build   # dist/index.js
 npm run smoke   # built tool -> real dsh-skill + dsh-skill-filesystem catalog
 ```
@@ -179,6 +227,8 @@ service).
   MCP), not in this plugin.
 - **Per-activation tool sandbox.** Tool narrowing is post-hoc and best effort;
   see the caveat above.
+- **Gating anything security-relevant.** The Jev gate is advisory and may only
+  cancel a review; permissions, approvals and write guards stay deterministic.
 
 ## License
 
